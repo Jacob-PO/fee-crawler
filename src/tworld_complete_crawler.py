@@ -4,6 +4,7 @@ import re
 import os
 import requests
 from urllib.parse import urlencode, urlparse, parse_qs, quote_plus
+from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
@@ -13,7 +14,7 @@ from selenium.webdriver.common.keys import Keys
 from tqdm import tqdm
 from src.tworld_crawler import TworldCrawler
 from src.logger import setup_logger
-from config import BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR, CHROME_OPTIONS
+from config import BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR, CHROME_OPTIONS, HEADLESS
 
 logger = setup_logger(__name__)
 
@@ -83,6 +84,10 @@ class TworldCompleteCrawler(TworldCrawler):
             logger.warning("요금제 수집 실패 - requests fallback 시도")
             self._collect_rate_plans_fallback(url)
 
+        if not self.rate_plans:
+            logger.warning("requests fallback 실패 - 네트워크 캡처 시도")
+            self._collect_rate_plans_network(url)
+
         if self.rate_plans:
             unique = {(p['id'], p['name']) for p in self.rate_plans}
             self.rate_plans = [{'id': i, 'name': n} for i, n in unique]
@@ -108,6 +113,60 @@ class TworldCompleteCrawler(TworldCrawler):
                 logger.info(f"requests fallback: {len(self.rate_plans)}개 요금제 수집 성공")
         except Exception as e:
             logger.error(f"requests fallback 실패: {e}")
+
+    def _collect_rate_plans_network(self, url):
+        """selenium-wire로 네트워크 요청에서 요금제 추출"""
+        try:
+            from seleniumwire import webdriver as sw_webdriver
+
+            options = {"disable_encoding": True, "request_storage": "memory"}
+
+            chrome_options = webdriver.ChromeOptions()
+            for opt in CHROME_OPTIONS:
+                chrome_options.add_argument(opt)
+
+            if HEADLESS:
+                chrome_options.add_argument('--headless')
+
+            driver = sw_webdriver.Chrome(options=chrome_options,
+                                         seleniumwire_options=options)
+
+            driver.get(url)
+            time.sleep(5)
+
+            for request in driver.requests:
+                if request.response and request.response.status_code == 200:
+                    ctype = request.response.headers.get('Content-Type', '')
+                    if 'application/json' in ctype:
+                        try:
+                            body = request.response.body.decode('utf-8')
+                            data = json.loads(body)
+                        except Exception:
+                            continue
+
+                        if isinstance(data, list):
+                            for item in data:
+                                pid = item.get('prodId')
+                                pname = item.get('prodNm')
+                                if pid and pname:
+                                    self.rate_plans.append({'id': pid, 'name': pname})
+                        elif isinstance(data, dict):
+                            items = data.get('products') or data.get('list') or data.get('plans')
+                            if isinstance(items, list):
+                                for item in items:
+                                    pid = item.get('prodId')
+                                    pname = item.get('prodNm')
+                                    if pid and pname:
+                                        self.rate_plans.append({'id': pid, 'name': pname})
+            if self.rate_plans:
+                logger.info(f"네트워크 캡처로 {len(self.rate_plans)}개 요금제 수집")
+        except Exception as e:
+            logger.error(f"네트워크 캡처 실패: {e}")
+        finally:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     def _build_notice_url(self, network_type, scrb_type, plan):
         params = {
