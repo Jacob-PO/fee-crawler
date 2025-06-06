@@ -39,7 +39,11 @@ class TworldCompleteCrawler(TworldCrawler):
 
             html = self.driver.page_source
             # 스크립트 내 JSON에서 추출 시도
-            plans = re.findall(r'"prodId"\s*:\s*"(.*?)".*?"prodNm"\s*:\s*"(.*?)"', html)
+            plans = re.findall(
+                r'"prodId"\s*:\s*"([^"]+)".*?"prodNm"\s*:\s*"([^"]+)"',
+                html,
+                re.DOTALL,
+            )
             for pid, pname in plans:
                 self.rate_plans.append({'id': pid, 'name': pname})
 
