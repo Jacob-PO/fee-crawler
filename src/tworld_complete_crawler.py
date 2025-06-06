@@ -334,6 +334,19 @@ class TworldCompleteCrawler(TworldCrawler):
         except:
             return False
         return False
+
+    def _get_plan_info(self):
+        """현재 페이지에서 요금제 정보 추출"""
+        try:
+            page_source = self.driver.page_source
+            match = re.search(r'"prodNm":"([^"]+)".*?"basicCharge":(\d+)', page_source)
+            if match:
+                plan_name = match.group(1)
+                plan_price = int(match.group(2))
+                return plan_name, plan_price
+        except Exception:
+            pass
+        return "알수없음", 0
     
     def _select_network_type(self, network_type):
         """네트워크 타입 선택"""
@@ -380,7 +393,9 @@ class TworldCompleteCrawler(TworldCrawler):
             if not self._is_driver_alive():
                 logger.error("드라이버가 종료되었습니다.")
                 return
-                
+
+            plan_name, plan_price = self._get_plan_info()
+
             # 테이블 찾기
             tables = self.driver.find_elements(By.CLASS_NAME, "disclosure-list")
             if not tables:
@@ -399,11 +414,24 @@ class TworldCompleteCrawler(TworldCrawler):
                             cells = row.find_elements(By.TAG_NAME, "td")
                             if len(cells) >= 6:  # 최소 필요한 셀 수
                                 # 데이터 추출
-                                device_name = cells[0].text.strip()
+                                name_elem = None
+                                option_elem = None
+                                try:
+                                    name_elem = cells[0].find_element(By.CSS_SELECTOR, "h4.device")
+                                except Exception:
+                                    pass
+                                try:
+                                    option_elem = cells[0].find_element(By.CSS_SELECTOR, "span.option")
+                                except Exception:
+                                    pass
+
+                                device_name = name_elem.text.strip() if name_elem else cells[0].text.strip()
+                                capacity = option_elem.text.strip() if option_elem else ""
+
                                 date_text = cells[1].text.strip() if len(cells) > 1 else ""
                                 release_price = self.clean_price(cells[2].text.strip()) if len(cells) > 2 else 0
                                 public_fee = self.clean_price(cells[3].text.strip()) if len(cells) > 3 else 0
-                                
+
                                 # 추가지원금 위치 확인 (테이블 구조에 따라 조정)
                                 add_fee = 0
                                 if len(cells) > 5:
@@ -414,14 +442,16 @@ class TworldCompleteCrawler(TworldCrawler):
                                 if device_name and public_fee > 0:
                                     # 중복 체크 (동일 디바이스, 네트워크, 가입유형)
                                     duplicate_key = f"{device_name}_{network_type}_{scrb_type['value']}"
-                                    
+
                                     data_item = {
                                         'device_name': device_name,
                                         'manufacturer': self._get_manufacturer_from_name(device_name),
                                         'network_type': network_type,
                                         'scrb_type': scrb_type['value'],
                                         'scrb_type_name': scrb_type['name'],
-                                        'plan_name': f"{network_type} 기본",
+                                        'plan_name': plan_name,
+                                        'plan_price': plan_price,
+                                        'capacity': capacity,
                                         'public_support_fee': public_fee,
                                         'additional_support_fee': add_fee,
                                         'total_support_fee': public_fee + add_fee,
