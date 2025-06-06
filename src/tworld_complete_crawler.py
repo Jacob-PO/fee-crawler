@@ -2,7 +2,7 @@ import time
 import json
 import re
 import os
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode, urlparse, parse_qs, quote_plus
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
@@ -27,19 +27,66 @@ class TworldCompleteCrawler(TworldCrawler):
         self.devices = []     # 디바이스 목록
         self.manufacturers = []  # 제조사 목록
         self.current_page_data = []  # 현재 페이지 데이터 추적
+
+    def _collect_rate_plans(self):
+        """요금제 목록 수집"""
+        try:
+            self.setup_driver()
+            url = "https://shop.tworld.co.kr/wireless/product/subscription/list"
+            logger.info(f"요금제 페이지 접속: {url}")
+            self.driver.get(url)
+            time.sleep(5)
+
+            html = self.driver.page_source
+            # 스크립트 내 JSON에서 추출 시도
+            plans = re.findall(r'"prodId"\s*:\s*"(.*?)".*?"prodNm"\s*:\s*"(.*?)"', html)
+            for pid, pname in plans:
+                self.rate_plans.append({'id': pid, 'name': pname})
+
+            if not self.rate_plans:
+                # DOM 요소에서 추출 시도
+                elems = self.driver.find_elements(By.CSS_SELECTOR, '[data-plan-id]')
+                for elem in elems:
+                    pid = elem.get_attribute('data-plan-id')
+                    pname = elem.text.strip()
+                    if pid and pname:
+                        self.rate_plans.append({'id': pid, 'name': pname})
+
+            logger.info(f"총 {len(self.rate_plans)}개 요금제 수집 완료")
+        except Exception as e:
+            logger.error(f"요금제 수집 오류: {e}")
+        finally:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+
+    def _build_notice_url(self, network_type, scrb_type, plan):
+        params = {
+            'modelNwType': network_type,
+            'saleMonth': '24',
+            'prodId': plan['id'],
+            'prodNm': plan['name'],
+            'saleYn': 'Y',
+            'order': 'DISCOUNT',
+            'scrbTypCd': scrb_type['value']
+        }
+        return f"https://shop.tworld.co.kr/notice?{urlencode(params, quote_via=quote_plus)}"
         
     def fetch_complete_data(self):
         """전체 데이터 수집 메인 메서드"""
         self.crawl_info['start_time'] = time.time()
         
         try:
-            # 1. 공시지원금 페이지에서 데이터 수집
             logger.info("=" * 50)
-            logger.info("STEP 1: 공시지원금 페이지에서 전체 데이터 수집")
+            logger.info("STEP 1: 요금제 목록 수집")
+            logger.info("=" * 50)
+            self._collect_rate_plans()
+
+            logger.info("=" * 50)
+            logger.info("STEP 2: 공시지원금 페이지에서 전체 데이터 수집")
             logger.info("=" * 50)
             self._collect_all_from_notice_page()
-            
-            # 2. 결과 정리
+
             self._finalize_results()
             
         except Exception as e:
@@ -56,62 +103,37 @@ class TworldCompleteCrawler(TworldCrawler):
     def _collect_all_from_notice_page(self):
         """공시지원금 페이지에서 모든 데이터 수집"""
         try:
-            self.setup_driver()
-            url = "https://shop.tworld.co.kr/notice"
-            logger.info(f"공시지원금 페이지 접속: {url}")
-            
-            self.driver.get(url)
-            time.sleep(5)  # 페이지 로딩 대기
-            
-            # 페이지 소스 저장 (디버깅용)
-            self._save_debug_html(self.driver.page_source, "notice_main")
-            
-            # 1. 네트워크 타입별로 수집 (5G, LTE)
+            if not self.rate_plans:
+                logger.warning("수집된 요금제가 없습니다.")
+                return
+
+            scrb_types = [
+                {'value': '31', 'name': '기기변경'},
+                {'value': '11', 'name': '신규가입'},
+                {'value': '41', 'name': '번호이동'}
+            ]
+
             network_types = ['5G', 'LTE']
-            
-            for network_type in network_types:
-                logger.info(f"\n{network_type} 데이터 수집 시작")
-                
-                # 드라이버 재연결 (연결이 끊어진 경우 대비)
-                if not self._is_driver_alive():
-                    logger.info("드라이버 재연결 중...")
-                    self.setup_driver()
-                    self.driver.get(url)
-                    time.sleep(5)
-                
-                # 네트워크 타입 선택
-                self._select_network_type(network_type)
-                time.sleep(3)
-                
-                # 가입 유형별로 수집
-                scrb_types = [
-                    {'value': '31', 'name': '기기변경'},
-                    {'value': '11', 'name': '신규가입'},
-                    {'value': '41', 'name': '번호이동'}
-                ]
-                
-                for scrb_type in scrb_types:
-                    logger.info(f"  - {scrb_type['name']} 데이터 수집")
-                    
-                    # 드라이버 재연결 체크
-                    if not self._is_driver_alive():
-                        logger.info("드라이버 재연결 중...")
+
+            for plan in self.rate_plans:
+                for network_type in network_types:
+                    for scrb_type in scrb_types:
+                        url = self._build_notice_url(network_type, scrb_type, plan)
+                        logger.info(f"\n요금제: {plan['name']} ({network_type} / {scrb_type['name']})")
                         self.setup_driver()
+                        logger.info(f"공시지원금 페이지 접속: {url}")
                         self.driver.get(url)
                         time.sleep(5)
-                        # 네트워크 타입 다시 선택
-                        self._select_network_type(network_type)
+
+                        self._save_debug_html(self.driver.page_source, "notice_main")
+
+                        self._collect_all_pages_data(network_type, scrb_type, plan)
+
+                        if self.driver:
+                            self.driver.quit()
+                            self.driver = None
+
                         time.sleep(2)
-                    
-                    # 가입 유형 선택
-                    self._select_scrb_type(scrb_type['value'])
-                    time.sleep(3)
-                    
-                    # 모든 페이지 데이터 수집
-                    self._collect_all_pages_data(network_type, scrb_type)
-                    
-                    # 서버 부하 방지
-                    time.sleep(2)
             
         except Exception as e:
             logger.error(f"데이터 수집 중 오류: {e}")
@@ -120,28 +142,26 @@ class TworldCompleteCrawler(TworldCrawler):
                 self.driver.quit()
                 self.driver = None
     
-    def _collect_all_pages_data(self, network_type, scrb_type):
+    def _collect_all_pages_data(self, network_type, scrb_type, plan):
         """모든 페이지의 데이터 수집 (개선된 페이지네이션)"""
         try:
             current_page = 1
             total_pages = self._get_total_pages()
-            
-            if total_pages == 0:
-                # 페이지네이션이 없는 경우 현재 페이지만 수집
+
+            if total_pages <= 1:
                 logger.info(f"    페이지 1/1 크롤링")
-                self._collect_page_data(network_type, scrb_type)
+                self._collect_page_data(network_type, scrb_type, plan)
                 return
-            
+
             logger.info(f"    총 {total_pages}개 페이지 발견")
-            
-            # 진행바 표시
+
             with tqdm(total=total_pages, desc=f"    {scrb_type['name']} 페이지 크롤링") as pbar:
                 while current_page <= total_pages:
                     logger.debug(f"    페이지 {current_page}/{total_pages} 크롤링")
-                    
+
                     # 현재 페이지 데이터 수집
                     before_count = len(self.all_data)
-                    self._collect_page_data(network_type, scrb_type)
+                    self._collect_page_data(network_type, scrb_type, plan)
                     after_count = len(self.all_data)
                     
                     items_collected = after_count - before_count
@@ -150,14 +170,14 @@ class TworldCompleteCrawler(TworldCrawler):
                     
                     pbar.update(1)
                     
-                    # 다음 페이지로 이동
                     if current_page < total_pages:
                         if not self._go_to_next_page(current_page + 1):
                             logger.warning(f"    페이지 {current_page + 1} 이동 실패")
                             break
-                        time.sleep(3)  # 페이지 로딩 대기
-                    
-                    current_page += 1
+                        time.sleep(3)
+                        current_page += 1
+                    else:
+                        break
                     
         except Exception as e:
             logger.error(f"전체 페이지 데이터 수집 오류: {e}")
@@ -165,14 +185,19 @@ class TworldCompleteCrawler(TworldCrawler):
     def _get_total_pages(self):
         """총 페이지 수 확인"""
         try:
+            page_source = self.driver.page_source
+            match = re.search(r'"lastPage"\s*:\s*(\d+)', page_source)
+            if match:
+                return int(match.group(1))
+
             # 페이지네이션 영역 찾기
             pagination_selectors = [
                 "div.pagination",
-                "ul.pagination", 
+                "ul.pagination",
                 "div.paging",
                 "div[class*='page']"
             ]
-            
+
             pagination = None
             for selector in pagination_selectors:
                 try:
@@ -181,7 +206,7 @@ class TworldCompleteCrawler(TworldCrawler):
                         break
                 except:
                     continue
-            
+
             if not pagination:
                 logger.debug("페이지네이션을 찾을 수 없습니다.")
                 return 1
@@ -386,7 +411,7 @@ class TworldCompleteCrawler(TworldCrawler):
         except Exception as e:
             logger.error(f"가입 유형 선택 실패: {e}")
     
-    def _collect_page_data(self, network_type, scrb_type):
+    def _collect_page_data(self, network_type, scrb_type, plan):
         """현재 페이지의 데이터 수집"""
         try:
             # 드라이버 체크
@@ -394,7 +419,10 @@ class TworldCompleteCrawler(TworldCrawler):
                 logger.error("드라이버가 종료되었습니다.")
                 return
 
-            plan_name, plan_price = self._get_plan_info()
+            plan_name, plan_price = plan['name'], 0
+            _, parsed_price = self._get_plan_info()
+            if parsed_price:
+                plan_price = parsed_price
 
             # 테이블 찾기
             tables = self.driver.find_elements(By.CLASS_NAME, "disclosure-list")
