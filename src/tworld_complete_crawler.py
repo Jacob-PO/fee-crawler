@@ -13,7 +13,8 @@ from selenium.webdriver.common.keys import Keys
 from tqdm import tqdm
 from src.tworld_crawler import TworldCrawler
 from src.logger import setup_logger
-from config import BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR, CHROME_OPTIONS
+from config import (BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR,
+                    CHROME_OPTIONS, HEADLESS)
 
 logger = setup_logger(__name__)
 
@@ -29,10 +30,73 @@ class TworldCompleteCrawler(TworldCrawler):
         self.manufacturers = []  # 제조사 목록
         self.current_page_data = []  # 현재 페이지 데이터 추적
 
+    def _collect_rate_plans_network(self, url):
+        """selenium-wire를 사용해 네트워크 응답에서 요금제 추출"""
+        try:
+            from seleniumwire import webdriver as sw_webdriver
+
+            options = {
+                'disable_encoding': True,
+                'request_storage': 'memory'
+            }
+
+            chrome_opts = Options()
+            for opt in CHROME_OPTIONS:
+                chrome_opts.add_argument(opt)
+            if HEADLESS:
+                chrome_opts.add_argument('--headless=new')
+
+            driver = sw_webdriver.Chrome(
+                seleniumwire_options=options,
+                options=chrome_opts
+            )
+
+            driver.get(url)
+            time.sleep(5)
+
+            for request in driver.requests:
+                if request.response and 'application/json' in request.response.headers.get('Content-Type', ''):
+                    try:
+                        body = request.response.body.decode('utf-8', 'ignore')
+                        data = json.loads(body)
+
+                        if isinstance(data, list):
+                            for item in data:
+                                pid = item.get('prodId')
+                                pname = item.get('prodNm')
+                                if pid and pname:
+                                    self.rate_plans.append({'id': pid, 'name': pname})
+                        elif isinstance(data, dict):
+                            items = data.get('products') or data.get('plans') or data.get('list')
+                            if items:
+                                for item in items:
+                                    pid = item.get('prodId')
+                                    pname = item.get('prodNm')
+                                    if pid and pname:
+                                        self.rate_plans.append({'id': pid, 'name': pname})
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            logger.debug(f"네트워크 요금제 수집 실패: {e}")
+        finally:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
     def _collect_rate_plans(self):
         """요금제 목록 수집"""
         url = "https://shop.tworld.co.kr/wireless/product/subscription/list"
         try:
+            # 0) 네트워크 레벨에서 JSON 응답 우선 탐색
+            self._collect_rate_plans_network(url)
+
+            # selenium-wire 수집으로 충분하면 바로 종료
+            if self.rate_plans:
+                logger.info(f"총 {len(self.rate_plans)}개 요금제 수집 완료 (network)")
+                return
+
             self.setup_driver()
             logger.info(f"요금제 페이지 접속: {url}")
             self.driver.get(url)
