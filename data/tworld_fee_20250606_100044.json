@@ -1,0 +1,141 @@
+{
+  "crawl_info": {
+    "start_time": "2025-06-06 10:00:44.225421",
+    "end_time": "2025-06-06 10:00:55.988514",
+    "total_items": 12,
+    "valid_items": 12,
+    "errors": []
+  },
+  "data": [
+    {
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "device_name": "5GX 프라임",
+      "plan_name": "금액\n\n782",
+      "total_support_fee": 680000,
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 1298000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25 울트라_512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "total_support_fee": 680000,
+      "release_price": 1841400,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25+256G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 1353000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25 울트라1T",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 2127400,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25 울트라256G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 1698400,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25 울트라512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 1841400,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25+512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 102000,
+      "total_support_fee": 782000,
+      "release_price": 1496000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "total_support_fee": 680000,
+      "release_price": 1155000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25_512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "total_support_fee": 680000,
+      "release_price": 1298000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25+",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "total_support_fee": 680000,
+      "release_price": 1353000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    },
+    {
+      "device_name": "갤럭시 S25+_512G",
+      "plan_name": "5GX 프라임",
+      "public_support_fee": 680000,
+      "additional_support_fee": 0,
+      "total_support_fee": 680000,
+      "release_price": 1496000,
+      "date": "2025.05.25",
+      "timestamp": "2025-06-06 10:00:44.225416",
+      "crawled_at": "2025-06-06 10:00:44"
+    }
+  ]
+}
