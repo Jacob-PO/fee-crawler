@@ -37,24 +37,43 @@ class TworldCompleteCrawler(TworldCrawler):
             self.driver.get(url)
             time.sleep(5)
 
-            html = self.driver.page_source
-            # 스크립트 내 JSON에서 추출 시도
-            plans = re.findall(
-                r'"prodId"\s*:\s*"([^"]+)".*?"prodNm"\s*:\s*"([^"]+)"',
-                html,
-                re.DOTALL,
-            )
-            for pid, pname in plans:
-                self.rate_plans.append({'id': pid, 'name': pname})
+            # 1) 자바스크립트 변수에서 요금제 추출 시도
+            try:
+                plans_json = self.driver.execute_script(
+                    "return window._this && _this.products ? JSON.stringify(_this.products) : null;"
+                )
+                if plans_json:
+                    for item in json.loads(plans_json):
+                        pid = item.get('prodId')
+                        pname = item.get('prodNm')
+                        if pid and pname:
+                            self.rate_plans.append({'id': pid, 'name': pname})
+            except Exception as e:
+                logger.debug(f"JS에서 요금제 추출 실패: {e}")
 
+            # 2) HTML 내에서 정규식으로 추출
             if not self.rate_plans:
-                # DOM 요소에서 추출 시도
+                html = self.driver.page_source
+                plans = re.findall(
+                    r'"prodId"\s*:\s*"([^"]+)".*?"prodNm"\s*:\s*"([^"]+)"',
+                    html,
+                    re.DOTALL,
+                )
+                for pid, pname in plans:
+                    self.rate_plans.append({'id': pid, 'name': pname})
+
+            # 3) DOM 요소에서 추출
+            if not self.rate_plans:
                 elems = self.driver.find_elements(By.CSS_SELECTOR, '[data-plan-id]')
                 for elem in elems:
                     pid = elem.get_attribute('data-plan-id')
                     pname = elem.text.strip()
                     if pid and pname:
                         self.rate_plans.append({'id': pid, 'name': pname})
+
+            # 중복 제거
+            unique = {(p['id'], p['name']) for p in self.rate_plans}
+            self.rate_plans = [{'id': i, 'name': n} for i, n in unique]
 
             logger.info(f"총 {len(self.rate_plans)}개 요금제 수집 완료")
         except Exception as e:
