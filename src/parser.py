@@ -1,4 +1,5 @@
 import re
+import json
 from bs4 import BeautifulSoup
 from src.utils import clean_price, extract_plan_name, extract_device_name
 from src.logger import setup_logger
@@ -11,23 +12,52 @@ class TworldParser:
     def __init__(self):
         self.data = []
         self.device_name = None
+
+    def _parse_json_data(self, html_content):
+        """스크립트 내 JSON 배열 파싱"""
+        try:
+            match = re.search(r"_this\.products\s*=\s*parseObject\((\[.*?\])\);", html_content, re.S)
+            if match:
+                products = json.loads(match.group(1))
+                parsed = []
+                for item in products:
+                    public_fee = int(item.get('telecomSaleAmt', 0))
+                    add_fee = int(item.get('twdSaleAmt', 0))
+                    parsed.append({
+                        'device_name': item.get('productNm'),
+                        'plan_name': item.get('prodNm'),
+                        'public_support_fee': public_fee,
+                        'additional_support_fee': add_fee,
+                        'total_support_fee': public_fee + add_fee
+                    })
+                return parsed
+        except Exception as e:
+            logger.debug(f"JSON 데이터 파싱 오류: {e}")
+        return []
     
     def parse(self, html_content):
         """HTML 파싱 메인 메서드"""
+        # 스크립트 내부 JSON 데이터 우선 파싱
+        json_items = self._parse_json_data(html_content)
+        if json_items:
+            self.data = json_items
+            logger.info(f"스크립트 JSON에서 {len(self.data)}개 데이터 파싱")
+            return self.data
+
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # 디바이스명 추출
         self.device_name = self._extract_device_info(soup)
         logger.info(f"디바이스명: {self.device_name}")
-        
+
         # 메인 파싱 - depth-num 클래스를 사용한 정확한 파싱
         self._parse_disclosure_data(soup)
-        
+
         # 테이블에서 추가 데이터 파싱
         self._parse_table_data(soup)
-        
+
         logger.info(f"총 {len(self.data)}개 데이터 파싱 완료")
-        
+
         return self.data
     
     def _extract_device_info(self, soup):
