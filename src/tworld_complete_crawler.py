@@ -2,6 +2,7 @@ import time
 import json
 import re
 import os
+import requests
 from urllib.parse import urlencode, urlparse, parse_qs, quote_plus
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
@@ -12,7 +13,7 @@ from selenium.webdriver.common.keys import Keys
 from tqdm import tqdm
 from src.tworld_crawler import TworldCrawler
 from src.logger import setup_logger
-from config import BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR
+from config import BASE_URL, MAX_RETRIES, RETRY_DELAY, DATA_DIR, CHROME_OPTIONS
 
 logger = setup_logger(__name__)
 
@@ -30,9 +31,9 @@ class TworldCompleteCrawler(TworldCrawler):
 
     def _collect_rate_plans(self):
         """요금제 목록 수집"""
+        url = "https://shop.tworld.co.kr/wireless/product/subscription/list"
         try:
             self.setup_driver()
-            url = "https://shop.tworld.co.kr/wireless/product/subscription/list"
             logger.info(f"요금제 페이지 접속: {url}")
             self.driver.get(url)
             time.sleep(5)
@@ -71,17 +72,42 @@ class TworldCompleteCrawler(TworldCrawler):
                     if pid and pname:
                         self.rate_plans.append({'id': pid, 'name': pname})
 
-            # 중복 제거
-            unique = {(p['id'], p['name']) for p in self.rate_plans}
-            self.rate_plans = [{'id': i, 'name': n} for i, n in unique]
-
-            logger.info(f"총 {len(self.rate_plans)}개 요금제 수집 완료")
         except Exception as e:
             logger.error(f"요금제 수집 오류: {e}")
         finally:
             if self.driver:
                 self.driver.quit()
                 self.driver = None
+
+        if not self.rate_plans:
+            logger.warning("요금제 수집 실패 - requests fallback 시도")
+            self._collect_rate_plans_fallback(url)
+
+        if self.rate_plans:
+            unique = {(p['id'], p['name']) for p in self.rate_plans}
+            self.rate_plans = [{'id': i, 'name': n} for i, n in unique]
+            logger.info(f"총 {len(self.rate_plans)}개 요금제 수집 완료")
+        else:
+            logger.warning("요금제 수집 실패")
+
+    def _collect_rate_plans_fallback(self, url):
+        """Selenium 실패 시 requests로 요금제 재수집"""
+        try:
+            ua = next((opt.split('=', 1)[1] for opt in CHROME_OPTIONS if opt.startswith('--user-agent=')), 'Mozilla/5.0')
+            headers = {'User-Agent': ua}
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            plans = re.findall(
+                r'"prodId"\s*:\s*"([^"]+)".*?"prodNm"\s*:\s*"([^"]+)",?',
+                resp.text,
+                re.DOTALL,
+            )
+            for pid, pname in plans:
+                self.rate_plans.append({'id': pid, 'name': pname})
+            if self.rate_plans:
+                logger.info(f"requests fallback: {len(self.rate_plans)}개 요금제 수집 성공")
+        except Exception as e:
+            logger.error(f"requests fallback 실패: {e}")
 
     def _build_notice_url(self, network_type, scrb_type, plan):
         params = {
