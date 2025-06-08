@@ -262,10 +262,6 @@ class LGCrawlerV6:
         """특정 조합의 요금제 수집"""
         try:
             driver.get(self.base_url)
-             # ── 여기에 추가 ──
-    with open('debug_home.html', 'w', encoding='utf-8') as f:
-        f.write(driver.page_source)
-    # ─────────────────
             time.sleep(2)
             
             # 가입유형 선택
