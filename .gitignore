@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+logs/
+data/
+*.log
+*.json
+*.xlsx
+debug_screenshots/
+checkpoints/
