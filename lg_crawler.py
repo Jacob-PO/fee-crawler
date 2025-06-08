@@ -1,19 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LG U+ 휴대폰 지원금 통합 크롤러 - v7.0 안정화 버전
-문제 해결 및 안정성 개선
+LG U+ 휴대폰 지원금 통합 크롤러 - v7.2 수정 버전
+v3.6 작동 코드 기반으로 완전 재작성
 
-주요 개선사항:
-    - JavaScript 처리 최적화
-    - 더 강력한 요소 대기 메커니즘
-    - 상세한 오류 로깅
-    - 스크린샷 디버깅 기능
-    - 단일/멀티 스레드 모드 지원
-    - 안정적인 데이터 추출
+주요 수정사항:
+    - 가입유형/기기종류 선택 로직 수정 (id 사용)
+    - 테이블 데이터 추출 로직 v3.6 기반 재작성
+    - 페이지네이션 처리 개선
+    - 안정적인 요소 대기 및 클릭
 
 작성일: 2025-01-11
-버전: 7.0
+버전: 7.2
 """
 
 import time
@@ -55,20 +53,19 @@ except ImportError:
 # Console 초기화
 console = Console() if RICH_AVAILABLE else None
 
-# 로깅 설정 개선
+# 로깅 설정
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG 레벨로 변경
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
     handlers=[
-        logging.FileHandler('lg_crawler_debug.log', encoding='utf-8'),
-        logging.StreamHandler()  # 콘솔에도 출력
+        logging.FileHandler('lg_crawler.log', encoding='utf-8'),
     ]
 )
 logger = logging.getLogger(__name__)
 
 
 class LGCrawlerV7:
-    """LG U+ 크롤러 v7.0 - 안정화 버전"""
+    """LG U+ 크롤러 v7.2 - 수정 버전"""
     
     def __init__(self, config=None):
         """초기화"""
@@ -76,21 +73,23 @@ class LGCrawlerV7:
         self.data = []
         self.data_lock = threading.Lock()
         
-        # 기본 설정 (타임아웃 증가)
+        # 기본 설정
         self.config = {
-            'headless': False,  # 디버깅을 위해 기본값 False
-            'page_load_timeout': 30,  # 증가
-            'element_wait_timeout': 15,  # 증가
-            'max_workers': 1,  # 안정성을 위해 기본값 1
-            'retry_count': 3,  # 재시도 횟수 증가
+            'headless': False,
+            'page_load_timeout': 30,
+            'element_wait_timeout': 15,
+            'table_wait_timeout': 30,
+            'max_workers': 1,
+            'retry_count': 3,
             'output_dir': 'data',
             'save_formats': ['excel', 'csv'],
             'max_rate_plans': 0,
-            'minimal_wait': False,  # 안정성을 위해 False
+            'minimal_wait': False,
             'show_browser': True,
-            'debug_screenshots': True,  # 스크린샷 저장
-            'single_thread': False,  # 단일 스레드 모드
-            'wait_after_click': 2.0,  # 클릭 후 대기 시간
+            'debug_screenshots': False,
+            'single_thread': True,
+            'wait_after_click': 1.5,
+            'delay_between_actions': 1,
         }
         
         if config:
@@ -98,7 +97,8 @@ class LGCrawlerV7:
         
         # 디렉토리 생성
         os.makedirs(self.config['output_dir'], exist_ok=True)
-        os.makedirs('debug_screenshots', exist_ok=True)
+        if self.config['debug_screenshots']:
+            os.makedirs('debug_screenshots', exist_ok=True)
         
         # 전역 변수
         self.all_combinations = []
@@ -114,7 +114,7 @@ class LGCrawlerV7:
         logger.info(f"크롤러 초기화 완료. 설정: {self.config}")
     
     def create_driver(self):
-        """Chrome 드라이버 생성 - 개선된 옵션"""
+        """Chrome 드라이버 생성"""
         chrome_options = Options()
         
         # 기본 옵션
@@ -123,23 +123,16 @@ class LGCrawlerV7:
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--no-first-run')
+        chrome_options.add_argument('--no-default-browser-check')
         
         # User-Agent 설정
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # 성능 옵션 (JavaScript는 활성화 유지)
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument('--disable-images')  # 이미지만 비활성화
-        
-        # 추가 안정성 옵션
-        chrome_options.add_argument('--disable-logging')
-        chrome_options.add_argument('--disable-web-security')
-        chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
         # Headless 모드
         if self.config['headless'] and not self.config.get('show_browser'):
-            chrome_options.add_argument('--headless=new')
+            chrome_options.add_argument('--headless')
             chrome_options.add_argument('--window-size=1920,1080')
         else:
             chrome_options.add_argument('--window-size=1920,1080')
@@ -148,9 +141,7 @@ class LGCrawlerV7:
         try:
             driver = webdriver.Chrome(options=chrome_options)
             driver.set_page_load_timeout(self.config['page_load_timeout'])
-            
-            # 자동화 감지 우회
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            driver.maximize_window()
             
             logger.info("드라이버 생성 성공")
             return driver
@@ -159,56 +150,331 @@ class LGCrawlerV7:
             logger.error(f"드라이버 생성 실패: {str(e)}")
             raise
     
-    def safe_find_element(self, driver, by, value, timeout=None):
-        """안전한 요소 찾기 - 개선된 버전"""
-        if timeout is None:
-            timeout = self.config['element_wait_timeout']
-            
+    def wait_for_page_ready(self, driver):
+        """페이지가 완전히 로드될 때까지 대기"""
         try:
-            element = WebDriverWait(driver, timeout).until(
-                EC.presence_of_element_located((by, value))
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
             )
-            # 요소가 실제로 상호작용 가능한지 확인
-            WebDriverWait(driver, timeout).until(
-                EC.element_to_be_clickable((by, value))
-            )
-            return element
-        except TimeoutException:
-            logger.warning(f"요소를 찾을 수 없음: {by}={value}")
-            if self.config['debug_screenshots']:
-                self.take_screenshot(driver, f"element_not_found_{value}")
-            return None
-        except Exception as e:
-            logger.error(f"요소 찾기 오류: {str(e)}")
-            return None
-    
-    def take_screenshot(self, driver, name):
-        """디버깅용 스크린샷"""
-        try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"debug_screenshots/{name}_{timestamp}.png"
-            driver.save_screenshot(filename)
-            logger.debug(f"스크린샷 저장: {filename}")
+            # jQuery가 있으면 AJAX 완료 대기
+            try:
+                WebDriverWait(driver, 5).until(
+                    lambda d: d.execute_script("return typeof jQuery != 'undefined' && jQuery.active == 0")
+                )
+            except:
+                pass
+            time.sleep(0.5)
         except:
             pass
     
-    def wait_for_page_load(self, driver, timeout=None):
-        """페이지 로딩 대기"""
-        if timeout is None:
-            timeout = self.config['page_load_timeout']
-            
+    def safe_click(self, driver, element):
+        """안전한 클릭 (JavaScript 실행)"""
         try:
-            WebDriverWait(driver, timeout).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
-            time.sleep(1)  # 추가 안정성
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click();", element)
             return True
         except:
-            logger.warning("페이지 로딩 타임아웃")
+            try:
+                element.click()
+                return True
+            except:
+                return False
+    
+    def select_option(self, driver, name: str, value: str) -> bool:
+        """라디오 버튼 선택 - v3.6 기반"""
+        try:
+            # 가입유형과 기기종류 모두 id로 선택
+            if name in ["가입유형", "기기종류"]:
+                radio = WebDriverWait(driver, self.config['element_wait_timeout']).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, f'input[name="{name}"][id="{value}"]'))
+                )
+            else:
+                radio = WebDriverWait(driver, self.config['element_wait_timeout']).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, f'input[name="{name}"][value="{value}"]'))
+                )
+            
+            if not radio.is_selected():
+                radio_id = radio.get_attribute('id')
+                label = driver.find_element(By.CSS_SELECTOR, f'label[for="{radio_id}"]')
+                self.safe_click(driver, label)
+                time.sleep(self.config['delay_between_actions'])
+                
+            logger.info(f"{name} 선택: {value}")
+            return True
+            
+        except TimeoutException:
+            logger.error(f"옵션을 찾을 수 없음 ({name}, {value})")
+            return False
+        except Exception as e:
+            logger.error(f"옵션 선택 오류 ({name}, {value}): {e}")
             return False
     
+    def select_all_manufacturers(self, driver) -> bool:
+        """제조사 전체 선택"""
+        try:
+            all_checkbox = driver.find_element(By.CSS_SELECTOR, 'input[id="전체"]')
+            if not all_checkbox.is_selected():
+                all_label = driver.find_element(By.CSS_SELECTOR, 'label[for="전체"]')
+                self.safe_click(driver, all_label)
+                time.sleep(self.config['delay_between_actions'])
+                logger.info("제조사 '전체' 선택 완료")
+            return True
+        except Exception as e:
+            logger.error(f"제조사 전체 선택 오류: {e}")
+            return False
+    
+    def wait_for_table_ready(self, driver) -> bool:
+        """테이블이 준비될 때까지 대기"""
+        try:
+            self.wait_for_page_ready(driver)
+            
+            # 테이블 찾기
+            table = WebDriverWait(driver, self.config['table_wait_timeout']).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'table.b-table'))
+            )
+            
+            # 행이 있는지 확인
+            rows = table.find_elements(By.CSS_SELECTOR, 'tbody tr')
+            if len(rows) > 0:
+                logger.info(f"테이블 발견: {len(rows)}개 행")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"테이블 대기 중 오류: {e}")
+            return False
+    
+    def extract_table_data(self, driver, subscription_type: str, device_type: str, 
+                          rate_plan_name: str = "전체", rate_plan_id: str = None) -> int:
+        """테이블 데이터 추출 - v3.6 기반"""
+        extracted_count = 0
+        
+        try:
+            if not self.wait_for_table_ready(driver):
+                return 0
+            
+            rows = driver.find_elements(By.CSS_SELECTOR, 'table.b-table tbody tr')
+            if not rows:
+                logger.error("테이블 행을 찾을 수 없습니다")
+                return 0
+            
+            current_device = None
+            current_price = None
+            current_date = None
+            
+            for row_index, row in enumerate(rows):
+                try:
+                    cells = row.find_elements(By.TAG_NAME, 'td')
+                    
+                    if not cells:
+                        continue
+                    
+                    # 첫 번째 셀에 rowspan이 있으면 새로운 기기
+                    if len(cells) >= 9 and cells[0].get_attribute('rowspan'):
+                        # 기기 정보 추출
+                        try:
+                            device_link = cells[0].find_element(By.CSS_SELECTOR, 'a.link')
+                            device_name = device_link.find_element(By.CSS_SELECTOR, 'span.tit').text.strip()
+                            model_code = device_link.find_element(By.CSS_SELECTOR, 'span.txt').text.strip()
+                            current_device = f"{device_name} ({model_code})"
+                            
+                            current_price = cells[1].text.strip().replace('원', '').replace(',', '')
+                            current_date = cells[2].text.strip()
+                            
+                            # 나머지 데이터 (인덱스 3부터)
+                            plan_duration = cells[3].text.strip()
+                            subsidy = cells[4].text.strip().replace('원', '').replace(',', '')
+                            additional_subsidy = cells[5].text.strip().replace('원', '').replace(',', '')
+                            total_subsidy = cells[6].text.strip().replace('원', '').replace(',', '')
+                            
+                            try:
+                                recommended_discount = cells[7].find_element(By.CSS_SELECTOR, 'p.fw-b').text.strip().replace('원', '').replace(',', '')
+                            except:
+                                recommended_discount = '0'
+                            
+                            final_price = cells[8].text.strip().replace('원', '').replace(',', '')
+                            
+                        except Exception as e:
+                            logger.debug(f"새 기기 정보 추출 오류: {e}")
+                            continue
+                    
+                    elif len(cells) >= 6:  # rowspan이 없는 행 (같은 기기의 다른 약정)
+                        plan_duration = cells[0].text.strip()
+                        subsidy = cells[1].text.strip().replace('원', '').replace(',', '')
+                        additional_subsidy = cells[2].text.strip().replace('원', '').replace(',', '')
+                        total_subsidy = cells[3].text.strip().replace('원', '').replace(',', '')
+                        
+                        try:
+                            recommended_discount = cells[4].find_element(By.CSS_SELECTOR, 'p.fw-b').text.strip().replace('원', '').replace(',', '')
+                        except:
+                            recommended_discount = '0'
+                        
+                        final_price = cells[5].text.strip().replace('원', '').replace(',', '')
+                    else:
+                        continue
+                    
+                    # 데이터 저장
+                    if current_device and subsidy and final_price:
+                        with self.data_lock:
+                            self.data.append({
+                                '가입유형': subscription_type,
+                                '기기종류': device_type,
+                                '제조사': '전체',
+                                '요금제': rate_plan_name,
+                                '요금제ID': rate_plan_id or '',
+                                '월납부금액': '0',
+                                '기기명': current_device,
+                                '출고가': current_price,
+                                '공시일자': current_date,
+                                '요금제유지기간': plan_duration,
+                                '공시지원금': subsidy,
+                                '추가공시지원금': additional_subsidy,
+                                '지원금총액': total_subsidy,
+                                '추천할인': recommended_discount,
+                                '최종구매가': final_price,
+                                '크롤링시간': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            })
+                        extracted_count += 1
+                        
+                except StaleElementReferenceException:
+                    logger.debug(f"Stale element at row {row_index}, skipping...")
+                    continue
+                except Exception as e:
+                    logger.debug(f"행 {row_index} 처리 오류: {e}")
+                    continue
+            
+            logger.info(f"페이지에서 {extracted_count}개 데이터 추출")
+            return extracted_count
+            
+        except Exception as e:
+            logger.error(f"테이블 데이터 추출 오류: {e}")
+            return 0
+    
+    def handle_pagination(self, driver, subscription_type: str, device_type: str, 
+                         rate_plan_name: str = "전체", rate_plan_id: str = None) -> int:
+        """페이지네이션 처리"""
+        page = 1
+        total_extracted = 0
+        max_pages = 50  # 무한 루프 방지
+        
+        # 테스트 모드에서는 첫 2페이지만
+        if self.config.get('test_mode', False):
+            max_pages = 2
+            
+        while page <= max_pages:
+            try:
+                logger.info(f"페이지 {page} 크롤링 중...")
+                
+                # 현재 페이지 데이터 추출
+                extracted = self.extract_table_data(driver, subscription_type, device_type, rate_plan_name, rate_plan_id)
+                total_extracted += extracted
+                
+                if extracted == 0 and page == 1:
+                    logger.warning("첫 페이지에서 데이터를 찾지 못함")
+                    break
+                
+                # 다음 페이지 확인
+                try:
+                    pagination = driver.find_element(By.CSS_SELECTOR, 'ul.pagination')
+                    buttons = pagination.find_elements(By.TAG_NAME, 'li')
+                    
+                    next_button = None
+                    for i, button in enumerate(buttons):
+                        try:
+                            if 'active' in button.get_attribute('class'):
+                                # 현재 페이지 다음 버튼이 다음 페이지
+                                if i + 1 < len(buttons):
+                                    next_candidate = buttons[i + 1]
+                                    if 'disabled' not in next_candidate.get_attribute('class'):
+                                        next_button = next_candidate.find_element(By.TAG_NAME, 'button')
+                                        break
+                        except:
+                            continue
+                    
+                    if next_button:
+                        logger.info(f"다음 페이지로 이동 (페이지 {page + 1})")
+                        self.safe_click(driver, next_button)
+                        time.sleep(3)
+                        self.wait_for_page_ready(driver)
+                        page += 1
+                    else:
+                        logger.info(f"마지막 페이지 도달 (페이지 {page})")
+                        break
+                        
+                except Exception as e:
+                    logger.debug(f"페이지네이션 처리 중 오류: {e}")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"페이지 {page} 처리 중 오류: {e}")
+                break
+        
+        logger.info(f"총 {page}개 페이지에서 {total_extracted}개 데이터 수집")
+        return total_extracted
+    
+    def open_rate_plan_modal(self, driver) -> bool:
+        """요금제 선택 모달 열기"""
+        try:
+            more_button = driver.find_element(By.CSS_SELECTOR, 'button.c-btn-rect-2')
+            self.safe_click(driver, more_button)
+            time.sleep(2)
+            
+            # 모달 확인
+            modal = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'div.modal-content'))
+            )
+            
+            if modal:
+                logger.info("요금제 선택 모달 열기 성공")
+                return True
+                
+        except Exception as e:
+            logger.error(f"요금제 모달 열기 실패: {e}")
+            
+        return False
+    
+    def get_all_rate_plans(self, driver) -> List[Dict]:
+        """모달에서 모든 요금제 추출"""
+        try:
+            rate_plans = []
+            
+            sections = driver.find_elements(By.CSS_SELECTOR, 'div.c-section')
+            
+            for section in sections:
+                try:
+                    radios = section.find_elements(By.CSS_SELECTOR, 'input[type="radio"]')
+                    
+                    for radio in radios:
+                        try:
+                            plan_id = radio.get_attribute('id')
+                            plan_value = radio.get_attribute('value')
+                            label = driver.find_element(By.CSS_SELECTOR, f'label[for="{plan_id}"]')
+                            plan_name = label.text.strip()
+                            
+                            if plan_name:
+                                rate_plans.append({
+                                    'id': plan_id,
+                                    'value': plan_value,
+                                    'name': plan_name
+                                })
+                                
+                        except:
+                            continue
+                            
+                except:
+                    continue
+            
+            logger.info(f"총 {len(rate_plans)}개의 요금제 발견")
+            return rate_plans
+            
+        except Exception as e:
+            logger.error(f"요금제 목록 추출 오류: {e}")
+            return []
+    
     def collect_all_combinations(self):
-        """모든 조합 수집 - 개선된 버전"""
+        """모든 조합 수집"""
         if RICH_AVAILABLE:
             console.print("[bold cyan]요금제 조합 수집 시작...[/bold cyan]")
         else:
@@ -272,7 +538,6 @@ class LGCrawlerV7:
                             
                             progress.advance(task)
             else:
-                # Rich가 없을 때
                 step = 0
                 for sub_value, sub_name in subscription_types:
                     for dev_value, dev_name in device_types:
@@ -308,192 +573,53 @@ class LGCrawlerV7:
         except Exception as e:
             logger.error(f"조합 수집 오류: {str(e)}")
             logger.error(traceback.format_exc())
-            self.take_screenshot(driver, "combination_collection_error")
             
         finally:
             driver.quit()
     
     def _collect_rate_plans_for_combination(self, driver, sub_value, sub_name, dev_value, dev_name):
-        """특정 조합의 요금제 수집 - 개선된 버전"""
+        """특정 조합의 요금제 수집"""
         try:
             logger.info(f"요금제 수집 시작: {sub_name} - {dev_name}")
             
             # 페이지 로드
             driver.get(self.base_url)
-            self.wait_for_page_load(driver)
-            time.sleep(2)
+            self.wait_for_page_ready(driver)
+            time.sleep(3)
             
             # 가입유형 선택
-            sub_selector = f'input[name="가입유형"][value="{sub_value}"]'
-            sub_radio = self.safe_find_element(driver, By.CSS_SELECTOR, sub_selector)
-            if not sub_radio:
-                logger.error(f"가입유형 라디오 버튼을 찾을 수 없음: {sub_selector}")
-                self.take_screenshot(driver, f"sub_radio_not_found_{sub_value}")
+            if not self.select_option(driver, '가입유형', sub_value):
                 return []
-                
-            if not sub_radio.is_selected():
-                # 라벨 클릭으로 선택
-                label_selector = f'label[for="{sub_value}"]'
-                label = self.safe_find_element(driver, By.CSS_SELECTOR, label_selector)
-                if label:
-                    driver.execute_script("arguments[0].scrollIntoView(true);", label)
-                    time.sleep(0.5)
-                    driver.execute_script("arguments[0].click();", label)
-                    time.sleep(self.config['wait_after_click'])
-                    logger.debug(f"가입유형 선택: {sub_name}")
             
             # 기기종류 선택
-            dev_selector = f'input[name="기기종류"][value="{dev_value}"]'
-            dev_radio = self.safe_find_element(driver, By.CSS_SELECTOR, dev_selector)
-            if not dev_radio:
-                logger.error(f"기기종류 라디오 버튼을 찾을 수 없음: {dev_selector}")
-                self.take_screenshot(driver, f"dev_radio_not_found_{dev_value}")
-                return []
-                
-            if not dev_radio.is_selected():
-                label_selector = f'label[for="{dev_value}"]'
-                label = self.safe_find_element(driver, By.CSS_SELECTOR, label_selector)
-                if label:
-                    driver.execute_script("arguments[0].scrollIntoView(true);", label)
-                    time.sleep(0.5)
-                    driver.execute_script("arguments[0].click();", label)
-                    time.sleep(self.config['wait_after_click'])
-                    logger.debug(f"기기종류 선택: {dev_name}")
-            
-            # 요금제 모달 열기 - 다양한 선택자 시도
-            more_btn_selectors = [
-                'button.c-btn-rect-2',
-                'button[type="button"].c-btn-rect-2',
-                'button:contains("더보기")',
-                '//button[contains(text(), "더보기")]',
-                '//button[contains(@class, "c-btn-rect-2")]'
-            ]
-            
-            more_btn = None
-            for selector in more_btn_selectors:
-                if selector.startswith('//'):
-                    more_btn = self.safe_find_element(driver, By.XPATH, selector)
-                else:
-                    more_btn = self.safe_find_element(driver, By.CSS_SELECTOR, selector)
-                
-                if more_btn:
-                    logger.debug(f"더보기 버튼 찾음: {selector}")
-                    break
-            
-            if not more_btn:
-                logger.error("더보기 버튼을 찾을 수 없음")
-                self.take_screenshot(driver, "more_button_not_found")
+            if not self.select_option(driver, '기기종류', dev_value):
                 return []
             
-            # 버튼 클릭
-            driver.execute_script("arguments[0].scrollIntoView(true);", more_btn)
-            time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", more_btn)
-            time.sleep(2)  # 모달 열림 대기
+            # 요금제 모달 열기
+            if not self.open_rate_plan_modal(driver):
+                return []
             
             # 요금제 수집
-            rate_plans = []
-            
-            # 다양한 선택자로 시도
-            section_selectors = [
-                'div.c-section',
-                'div[class*="section"]',
-                'div.modal-content div'
-            ]
-            
-            sections = []
-            for selector in section_selectors:
-                sections = driver.find_elements(By.CSS_SELECTOR, selector)
-                if sections:
-                    logger.debug(f"섹션 찾음: {selector}, 개수: {len(sections)}")
-                    break
-            
-            if not sections:
-                logger.warning("요금제 섹션을 찾을 수 없음")
-                self.take_screenshot(driver, "sections_not_found")
-                
-                # 대체 방법: 모든 라디오 버튼 찾기
-                radios = driver.find_elements(By.CSS_SELECTOR, 'input[type="radio"][name*="요금"]')
-                logger.debug(f"대체 방법으로 찾은 라디오 버튼: {len(radios)}개")
-                
-                for radio in radios:
-                    try:
-                        plan_id = radio.get_attribute('id')
-                        plan_value = radio.get_attribute('value')
-                        
-                        # 라벨 찾기
-                        label = driver.find_element(By.CSS_SELECTOR, f'label[for="{plan_id}"]')
-                        plan_name = label.text.strip()
-                        
-                        if plan_name and plan_name not in ['기기변경', '번호이동', '신규가입', '5G폰', 'LTE폰', '전체']:
-                            rate_plans.append({
-                                'id': plan_id,
-                                'value': plan_value,
-                                'name': plan_name
-                            })
-                            logger.debug(f"요금제 추가: {plan_name}")
-                    except:
-                        continue
-            else:
-                # 섹션별로 요금제 수집
-                for section in sections:
-                    radios = section.find_elements(By.CSS_SELECTOR, 'input[type="radio"]')
-                    
-                    for radio in radios:
-                        try:
-                            plan_id = radio.get_attribute('id')
-                            plan_value = radio.get_attribute('value')
-                            label = driver.find_element(By.CSS_SELECTOR, f'label[for="{plan_id}"]')
-                            plan_name = label.text.strip()
-                            
-                            if plan_name and plan_name not in ['기기변경', '번호이동', '신규가입', '5G폰', 'LTE폰', '전체']:
-                                rate_plans.append({
-                                    'id': plan_id,
-                                    'value': plan_value,
-                                    'name': plan_name
-                                })
-                                logger.debug(f"요금제 추가: {plan_name}")
-                        except:
-                            continue
-            
-            logger.info(f"수집된 요금제 수: {len(rate_plans)}")
+            rate_plans = self.get_all_rate_plans(driver)
             
             # 모달 닫기
-            close_selectors = [
-                'button.c-btn-close',
-                'button[class*="close"]',
-                'button[aria-label="닫기"]',
-                '//button[contains(@class, "close")]'
-            ]
-            
-            for selector in close_selectors:
-                if selector.startswith('//'):
-                    close_btn = self.safe_find_element(driver, By.XPATH, selector, timeout=3)
-                else:
-                    close_btn = self.safe_find_element(driver, By.CSS_SELECTOR, selector, timeout=3)
-                
-                if close_btn:
-                    driver.execute_script("arguments[0].click();", close_btn)
-                    time.sleep(1)
-                    break
+            try:
+                close_button = driver.find_element(By.CSS_SELECTOR, 'button.c-btn-close')
+                self.safe_click(driver, close_button)
+                time.sleep(1)
+            except:
+                pass
             
             return rate_plans
             
         except Exception as e:
             logger.error(f"요금제 수집 오류 ({sub_name} - {dev_name}): {str(e)}")
-            logger.error(traceback.format_exc())
-            self.take_screenshot(driver, f"rate_plan_collection_error_{sub_name}_{dev_name}")
             return []
     
     def process_combination(self, combo_index, progress=None, task_id=None):
-        """단일 조합 처리 - 개선된 버전"""
+        """단일 조합 처리"""
         combo = self.all_combinations[combo_index]
         driver = None
-        thread_id = threading.current_thread().name
-        
-        # 현재 작업 상태 업데이트
-        with self.status_lock:
-            self.current_tasks[thread_id] = f"{combo['sub_name']} - {combo['dev_name']} - {combo['rate_plan']['name'][:30]}"
         
         try:
             logger.info(f"[{combo_index+1}/{len(self.all_combinations)}] 처리 시작: {combo['sub_name']} - {combo['dev_name']} - {combo['rate_plan']['name']}")
@@ -510,8 +636,8 @@ class LGCrawlerV7:
                 try:
                     # 페이지 로드
                     driver.get(self.base_url)
-                    self.wait_for_page_load(driver)
-                    time.sleep(2)
+                    self.wait_for_page_ready(driver)
+                    time.sleep(3)
                     
                     # 옵션 선택
                     if not self._select_options(driver, combo):
@@ -519,19 +645,18 @@ class LGCrawlerV7:
                         continue
                     
                     # 데이터 추출
-                    extracted_data = self._extract_data(driver, combo)
+                    extracted = self.handle_pagination(driver, combo['sub_name'], combo['dev_name'], 
+                                                     combo['rate_plan']['name'], combo['rate_plan'].get('value'))
                     
-                    if extracted_data:
-                        # 데이터 저장
+                    if extracted > 0:
                         with self.data_lock:
-                            self.data.extend(extracted_data)
-                            self.total_extracted += len(extracted_data)
                             self.completed_count += 1
+                            self.total_extracted += extracted
                         
-                        logger.info(f"✓ [{combo_index+1}] 성공: {len(extracted_data)}개 추출")
+                        logger.info(f"✓ [{combo_index+1}] 성공: {extracted}개 추출")
                         
-                        if RICH_AVAILABLE and len(extracted_data) > 0:
-                            console.print(f"[green]✓[/green] [{combo_index+1}/{len(self.all_combinations)}] {combo['rate_plan']['name'][:40]}... - [bold]{len(extracted_data)}개[/bold]")
+                        if RICH_AVAILABLE and extracted > 0:
+                            console.print(f"[green]✓[/green] [{combo_index+1}/{len(self.all_combinations)}] {combo['rate_plan']['name'][:40]}... - [bold]{extracted}개[/bold]")
                         
                         return True
                     else:
@@ -540,360 +665,67 @@ class LGCrawlerV7:
                 except Exception as e:
                     logger.error(f"재시도 중 오류 ({retry+1}/{self.config['retry_count']}): {str(e)}")
                     if retry < self.config['retry_count'] - 1:
-                        time.sleep(2)  # 재시도 전 대기
+                        time.sleep(3)
             
             # 모든 재시도 실패
-            with self.status_lock:
+            with self.data_lock:
                 self.failed_count += 1
             logger.error(f"✗ [{combo_index+1}] 최종 실패")
             return False
                 
         except Exception as e:
             logger.error(f"처리 오류 [{combo_index+1}]: {str(e)}")
-            logger.error(traceback.format_exc())
-            with self.status_lock:
+            with self.data_lock:
                 self.failed_count += 1
             return False
             
         finally:
             if driver:
                 driver.quit()
-            # 작업 상태 제거
-            with self.status_lock:
-                self.current_tasks.pop(thread_id, None)
     
     def _select_options(self, driver, combo):
-        """옵션 선택 - 개선된 버전"""
+        """옵션 선택"""
         try:
             # 가입유형 선택
-            sub_selector = f'input[name="가입유형"][value="{combo["sub_value"]}"]'
-            sub_radio = self.safe_find_element(driver, By.CSS_SELECTOR, sub_selector)
-            if not sub_radio:
-                logger.error(f"가입유형 라디오 버튼을 찾을 수 없음")
+            if not self.select_option(driver, '가입유형', combo['sub_value']):
                 return False
-                
-            if not sub_radio.is_selected():
-                label = driver.find_element(By.CSS_SELECTOR, f'label[for="{combo["sub_value"]}"]')
-                driver.execute_script("arguments[0].scrollIntoView(true);", label)
-                time.sleep(0.5)
-                driver.execute_script("arguments[0].click();", label)
-                time.sleep(self.config['wait_after_click'])
             
             # 기기종류 선택
-            dev_selector = f'input[name="기기종류"][value="{combo["dev_value"]}"]'
-            dev_radio = self.safe_find_element(driver, By.CSS_SELECTOR, dev_selector)
-            if not dev_radio:
-                logger.error(f"기기종류 라디오 버튼을 찾을 수 없음")
+            if not self.select_option(driver, '기기종류', combo['dev_value']):
                 return False
-                
-            if not dev_radio.is_selected():
-                label = driver.find_element(By.CSS_SELECTOR, f'label[for="{combo["dev_value"]}"]')
-                driver.execute_script("arguments[0].scrollIntoView(true);", label)
-                time.sleep(0.5)
-                driver.execute_script("arguments[0].click();", label)
-                time.sleep(self.config['wait_after_click'])
             
             # 요금제 선택
-            more_btn = self.safe_find_element(driver, By.CSS_SELECTOR, 'button.c-btn-rect-2')
-            if not more_btn:
-                # 대체 선택자 시도
-                more_btn = self.safe_find_element(driver, By.XPATH, '//button[contains(@class, "c-btn-rect-2")]')
-            
-            if more_btn:
-                driver.execute_script("arguments[0].scrollIntoView(true);", more_btn)
-                time.sleep(0.5)
-                driver.execute_script("arguments[0].click();", more_btn)
-                time.sleep(2)  # 모달 열림 대기
-                
-                # 요금제 라디오 선택
-                rate_radio = self.safe_find_element(driver, By.CSS_SELECTOR, f'input[id="{combo["rate_plan"]["id"]}"]')
-                if not rate_radio:
-                    logger.error(f"요금제 라디오 버튼을 찾을 수 없음: {combo['rate_plan']['id']}")
-                    return False
+            if self.open_rate_plan_modal(driver):
+                try:
+                    # 요금제 라디오 선택
+                    radio = driver.find_element(By.CSS_SELECTOR, f'input[id="{combo["rate_plan"]["id"]}"]')
+                    if not radio.is_selected():
+                        label = driver.find_element(By.CSS_SELECTOR, f'label[for="{combo["rate_plan"]["id"]}"]')
+                        self.safe_click(driver, label)
+                        time.sleep(1)
                     
-                if not rate_radio.is_selected():
-                    label = driver.find_element(By.CSS_SELECTOR, f'label[for="{combo["rate_plan"]["id"]}"]')
-                    driver.execute_script("arguments[0].scrollIntoView(true);", label)
-                    time.sleep(0.5)
-                    driver.execute_script("arguments[0].click();", label)
-                    time.sleep(0.5)
-                
-                # 적용 버튼
-                apply_btn = self.safe_find_element(driver, By.CSS_SELECTOR, 'button.c-btn-solid-1-m')
-                if not apply_btn:
-                    # 대체 선택자
-                    apply_btn = self.safe_find_element(driver, By.XPATH, '//button[contains(text(), "적용")]')
-                
-                if apply_btn:
-                    driver.execute_script("arguments[0].click();", apply_btn)
-                    time.sleep(2)
-                else:
-                    logger.error("적용 버튼을 찾을 수 없음")
+                    # 적용 버튼
+                    apply_button = driver.find_element(By.CSS_SELECTOR, 'button.c-btn-solid-1-m')
+                    self.safe_click(driver, apply_button)
+                    time.sleep(3)
+                except Exception as e:
+                    logger.error(f"요금제 선택 오류: {e}")
                     return False
             else:
-                logger.error("더보기 버튼을 찾을 수 없음")
                 return False
             
             # 제조사 전체 선택
-            all_checkbox = self.safe_find_element(driver, By.CSS_SELECTOR, 'input[id="전체"]')
-            if not all_checkbox:
-                # 대체 선택자
-                all_checkbox = self.safe_find_element(driver, By.CSS_SELECTOR, 'input[value="전체"]')
+            if not self.select_all_manufacturers(driver):
+                return False
             
-            if all_checkbox and not all_checkbox.is_selected():
-                label = driver.find_element(By.CSS_SELECTOR, 'label[for="전체"]')
-                driver.execute_script("arguments[0].click();", label)
-                time.sleep(1.5)
+            # 데이터 로딩 대기
+            time.sleep(3)
             
             return True
             
         except Exception as e:
             logger.error(f"옵션 선택 오류: {str(e)}")
-            self.take_screenshot(driver, "option_selection_error")
             return False
-    
-    def _extract_data(self, driver, combo):
-        """데이터 추출 - 개선된 버전"""
-        all_data = []
-        page = 1
-        max_pages = 10
-        empty_page_count = 0
-        
-        while page <= max_pages:
-            try:
-                # 테이블 찾기 - 다양한 선택자 시도
-                table_selectors = [
-                    'table.c-table',
-                    'table',
-                    '//table',
-                    'div.table-responsive table'
-                ]
-                
-                table = None
-                for selector in table_selectors:
-                    if selector.startswith('//'):
-                        tables = driver.find_elements(By.XPATH, selector)
-                    else:
-                        tables = driver.find_elements(By.CSS_SELECTOR, selector)
-                    
-                    if tables:
-                        table = tables[0]
-                        logger.debug(f"테이블 찾음: {selector}")
-                        break
-                
-                if not table:
-                    logger.warning(f"페이지 {page}: 테이블을 찾을 수 없음")
-                    self.take_screenshot(driver, f"no_table_page_{page}")
-                    break
-                
-                # 테이블 행 찾기
-                rows = table.find_elements(By.CSS_SELECTOR, 'tbody tr')
-                if not rows:
-                    # 대체 선택자
-                    rows = table.find_elements(By.XPATH, './/tr[position()>1]')
-                
-                if not rows:
-                    empty_page_count += 1
-                    if empty_page_count >= 2:
-                        logger.info(f"빈 페이지 연속 {empty_page_count}회 - 추출 종료")
-                        break
-                    logger.warning(f"페이지 {page}: 데이터 행 없음")
-                else:
-                    empty_page_count = 0
-                    logger.debug(f"페이지 {page}: {len(rows)}개 행 발견")
-                
-                # 현재 페이지 데이터 추출
-                page_data = self._parse_table_rows(rows, combo)
-                if page_data:
-                    all_data.extend(page_data)
-                    logger.info(f"페이지 {page}: {len(page_data)}개 데이터 추출")
-                
-                # 다음 페이지 확인
-                next_exists = False
-                pagination_selectors = [
-                    'ul.pagination',
-                    'div.pagination',
-                    'nav[aria-label="pagination"]'
-                ]
-                
-                for selector in pagination_selectors:
-                    try:
-                        pagination = driver.find_element(By.CSS_SELECTOR, selector)
-                        next_button = self._find_next_page_button(pagination)
-                        
-                        if next_button:
-                            driver.execute_script("arguments[0].scrollIntoView(true);", next_button)
-                            time.sleep(0.5)
-                            driver.execute_script("arguments[0].click();", next_button)
-                            time.sleep(2)  # 페이지 로딩 대기
-                            page += 1
-                            next_exists = True
-                            break
-                    except:
-                        continue
-                
-                if not next_exists:
-                    logger.info(f"마지막 페이지 도달 (페이지 {page})")
-                    break
-                    
-            except Exception as e:
-                logger.error(f"페이지 {page} 추출 오류: {str(e)}")
-                self.take_screenshot(driver, f"extraction_error_page_{page}")
-                break
-        
-        logger.info(f"총 {len(all_data)}개 데이터 추출 완료")
-        return all_data
-    
-    def _parse_table_rows(self, rows, combo):
-        """테이블 행 파싱 - 개선된 버전"""
-        data_list = []
-        current_device = None
-        current_price = None
-        current_date = None
-        
-        for i, row in enumerate(rows):
-            try:
-                cells = row.find_elements(By.TAG_NAME, 'td')
-                if not cells:
-                    continue
-                
-                # 셀 내용 로깅 (디버깅용)
-                if i < 3:  # 처음 3개 행만
-                    cell_texts = [cell.text.strip() for cell in cells]
-                    logger.debug(f"행 {i+1} 셀 내용: {cell_texts}")
-                
-                # 새 기기 정보가 있는 행 (rowspan 있는 경우)
-                if len(cells) >= 9:
-                    # 첫 번째 셀에 rowspan이 있는지 확인
-                    if cells[0].get_attribute('rowspan'):
-                        current_device = cells[0].text.strip()
-                        current_price = cells[1].text.strip()
-                        current_date = cells[2].text.strip()
-                        
-                        data = self._create_data_dict(
-                            cells[3:], combo, current_device, current_price, current_date
-                        )
-                        if data:
-                            data_list.append(data)
-                    else:
-                        # rowspan이 없지만 전체 데이터가 있는 경우
-                        data = self._create_data_dict(
-                            cells[3:], combo, cells[0].text.strip(), cells[1].text.strip(), cells[2].text.strip()
-                        )
-                        if data:
-                            data_list.append(data)
-                
-                # 기존 기기의 다른 약정 (rowspan으로 인해 셀이 적은 경우)
-                elif len(cells) >= 6 and current_device:
-                    data = self._create_data_dict(
-                        cells, combo, current_device, current_price, current_date
-                    )
-                    if data:
-                        data_list.append(data)
-                        
-            except Exception as e:
-                logger.debug(f"행 {i+1} 파싱 오류: {str(e)}")
-                continue
-        
-        logger.debug(f"파싱 결과: {len(data_list)}개 데이터")
-        return data_list
-    
-    def _create_data_dict(self, cells, combo, device, price, date):
-        """데이터 딕셔너리 생성 - 개선된 버전"""
-        try:
-            if len(cells) >= 6:
-                # 숫자 추출 헬퍼 함수
-                def extract_number(text):
-                    # "원", ",", 공백 제거하고 숫자만 추출
-                    cleaned = re.sub(r'[^\d-]', '', text)
-                    return cleaned if cleaned else '0'
-                
-                data = {
-                    '가입유형': combo['sub_name'],
-                    '기기종류': combo['dev_name'],
-                    '제조사': '전체',
-                    '요금제': combo['rate_plan']['name'],
-                    '요금제ID': combo['rate_plan'].get('value', ''),
-                    '월납부금액': '0',  # 필요시 추가 조회
-                    '기기명': device,
-                    '출고가': extract_number(price),
-                    '공시일자': date,
-                    '요금제유지기간': cells[0].text.strip(),
-                    '공시지원금': extract_number(cells[1].text),
-                    '추가공시지원금': extract_number(cells[2].text),
-                    '지원금총액': extract_number(cells[3].text),
-                    '추천할인': extract_number(cells[4].text),
-                    '최종구매가': extract_number(cells[5].text),
-                    '크롤링시간': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                # 데이터 검증
-                if device and device != '-' and price != '0':
-                    return data
-                else:
-                    logger.debug(f"유효하지 않은 데이터: 기기명={device}, 출고가={price}")
-                    return None
-            else:
-                logger.debug(f"셀 개수 부족: {len(cells)}개")
-                return None
-                
-        except Exception as e:
-            logger.debug(f"데이터 생성 오류: {str(e)}")
-            return None
-    
-    def _find_next_page_button(self, pagination):
-        """다음 페이지 버튼 찾기 - 개선된 버전"""
-        try:
-            # 현재 활성 페이지 찾기
-            active_page = pagination.find_element(By.CSS_SELECTOR, 'li.active')
-            current_page_num = int(active_page.text.strip())
-            logger.debug(f"현재 페이지: {current_page_num}")
-            
-            # 다음 페이지 번호 버튼 찾기
-            next_page_num = current_page_num + 1
-            buttons = pagination.find_elements(By.CSS_SELECTOR, f'li button')
-            
-            for button in buttons:
-                if button.text.strip() == str(next_page_num):
-                    return button
-            
-            # 다음 버튼 (화살표) 찾기
-            next_buttons = pagination.find_elements(By.CSS_SELECTOR, 'li:not(.disabled) button[aria-label*="다음"]')
-            if next_buttons:
-                return next_buttons[0]
-            
-            # > 버튼 찾기
-            next_arrow = pagination.find_elements(By.XPATH, './/button[contains(text(), ">")]')
-            if next_arrow:
-                parent_li = next_arrow[0].find_element(By.XPATH, '..')
-                if 'disabled' not in parent_li.get_attribute('class'):
-                    return next_arrow[0]
-            
-            return None
-            
-        except Exception as e:
-            logger.debug(f"다음 페이지 버튼 찾기 오류: {str(e)}")
-            return None
-    
-    def run_parallel_crawling(self):
-        """병렬 크롤링 실행 - 개선된 버전"""
-        self.start_time = time.time()
-        
-        # 단일 스레드 모드 확인
-        if self.config.get('single_thread', False):
-            self.config['max_workers'] = 1
-        
-        if RICH_AVAILABLE:
-            console.print(f"[bold cyan]크롤링 시작 (워커: {self.config['max_workers']}개)[/bold cyan]\n")
-        else:
-            print(f"크롤링 시작 (워커: {self.config['max_workers']}개)\n")
-        
-        # 단일 스레드 모드
-        if self.config['max_workers'] == 1:
-            self.run_single_thread_crawling()
-        else:
-            # 멀티 스레드 모드
-            self.run_multi_thread_crawling()
     
     def run_single_thread_crawling(self):
         """단일 스레드 크롤링"""
@@ -932,84 +764,6 @@ class LGCrawlerV7:
                 self.process_combination(i)
                 print(f"진행: {i+1}/{len(self.all_combinations)} ({(i+1)/len(self.all_combinations)*100:.1f}%)")
     
-    def run_multi_thread_crawling(self):
-        """멀티 스레드 크롤링"""
-        with ThreadPoolExecutor(max_workers=self.config['max_workers']) as executor:
-            
-            if RICH_AVAILABLE:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    MofNCompleteColumn(),
-                    TextColumn("• {task.fields[status]}"),
-                    TimeRemainingColumn(),
-                    console=console,
-                    refresh_per_second=2
-                ) as progress:
-                    
-                    main_task = progress.add_task(
-                        "[green]전체 진행률",
-                        total=len(self.all_combinations),
-                        status=f"추출: 0개"
-                    )
-                    
-                    futures = []
-                    for i in range(len(self.all_combinations)):
-                        future = executor.submit(self.process_combination, i, progress, main_task)
-                        futures.append(future)
-                    
-                    for future in as_completed(futures):
-                        try:
-                            result = future.result()
-                            progress.advance(main_task)
-                            
-                            elapsed = time.time() - self.start_time
-                            speed = self.completed_count / (elapsed / 60) if elapsed > 0 else 0
-                            
-                            progress.update(
-                                main_task,
-                                status=f"추출: {self.total_extracted:,}개 | 속도: {speed:.1f}/분"
-                            )
-                            
-                        except Exception as e:
-                            logger.error(f"Future 오류: {str(e)}")
-                            progress.advance(main_task)
-            else:
-                futures = []
-                for i in range(len(self.all_combinations)):
-                    future = executor.submit(self.process_combination, i)
-                    futures.append(future)
-                
-                completed = 0
-                for future in as_completed(futures):
-                    completed += 1
-                    print(f"진행: {completed}/{len(self.all_combinations)} ({completed/len(self.all_combinations)*100:.1f}%)")
-        
-        # 최종 통계
-        elapsed = time.time() - self.start_time
-        
-        if RICH_AVAILABLE:
-            table = Table(title="크롤링 완료", show_header=True, header_style="bold magenta")
-            table.add_column("항목", style="cyan", width=20)
-            table.add_column("수치", justify="right", style="yellow")
-            
-            table.add_row("소요 시간", f"{elapsed/60:.1f}분")
-            table.add_row("성공", f"{self.completed_count:,}개")
-            table.add_row("실패", f"{self.failed_count:,}개")
-            table.add_row("총 추출 데이터", f"{self.total_extracted:,}개")
-            if self.completed_count > 0:
-                table.add_row("평균 속도", f"{self.completed_count/(elapsed/60):.1f}개/분")
-            
-            console.print("\n")
-            console.print(table)
-        else:
-            print(f"\n크롤링 완료!")
-            print(f"소요 시간: {elapsed/60:.1f}분")
-            print(f"성공: {self.completed_count}개")
-            print(f"실패: {self.failed_count}개") 
-            print(f"총 추출 데이터: {self.total_extracted}개")
-    
     def save_data(self):
         """데이터 저장"""
         if not self.data:
@@ -1030,9 +784,6 @@ class LGCrawlerV7:
                 console.print(f"[yellow]중복 제거: {original_count} → {len(df)}[/yellow]")
             else:
                 print(f"중복 제거: {original_count} → {len(df)}")
-        
-        # 데이터 정렬
-        df = df.sort_values(['가입유형', '기기종류', '요금제', '기기명'])
         
         # 파일 저장
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1077,14 +828,14 @@ class LGCrawlerV7:
         try:
             if RICH_AVAILABLE:
                 console.print(Panel.fit(
-                    "[bold cyan]LG U+ 휴대폰 지원금 크롤러 v7.0[/bold cyan]\n"
-                    "[yellow]안정화 버전[/yellow]",
+                    "[bold cyan]LG U+ 휴대폰 지원금 크롤러 v7.2[/bold cyan]\n"
+                    "[yellow]수정 버전[/yellow]",
                     border_style="cyan"
                 ))
             else:
                 print("="*50)
-                print("LG U+ 휴대폰 지원금 크롤러 v7.0")
-                print("안정화 버전")
+                print("LG U+ 휴대폰 지원금 크롤러 v7.2")
+                print("수정 버전")
                 print("="*50)
             
             # 1. 조합 수집
@@ -1098,7 +849,38 @@ class LGCrawlerV7:
                 return []
             
             # 2. 크롤링 실행
-            self.run_parallel_crawling()
+            self.start_time = time.time()
+            
+            if RICH_AVAILABLE:
+                console.print(f"[bold cyan]크롤링 시작 (워커: 1개)[/bold cyan]\n")
+            else:
+                print(f"크롤링 시작 (워커: 1개)\n")
+            
+            self.run_single_thread_crawling()
+            
+            # 최종 통계
+            elapsed = time.time() - self.start_time
+            
+            if RICH_AVAILABLE:
+                table = Table(title="크롤링 완료", show_header=True, header_style="bold magenta")
+                table.add_column("항목", style="cyan", width=20)
+                table.add_column("수치", justify="right", style="yellow")
+                
+                table.add_row("소요 시간", f"{elapsed/60:.1f}분")
+                table.add_row("성공", f"{self.completed_count:,}개")
+                table.add_row("실패", f"{self.failed_count:,}개")
+                table.add_row("총 추출 데이터", f"{self.total_extracted:,}개")
+                if self.completed_count > 0:
+                    table.add_row("평균 속도", f"{self.completed_count/(elapsed/60):.1f}개/분")
+                
+                console.print("\n")
+                console.print(table)
+            else:
+                print(f"\n크롤링 완료!")
+                print(f"소요 시간: {elapsed/60:.1f}분")
+                print(f"성공: {self.completed_count}개")
+                print(f"실패: {self.failed_count}개") 
+                print(f"총 추출 데이터: {self.total_extracted}개")
             
             # 3. 데이터 저장
             saved_files = self.save_data()
@@ -1124,48 +906,42 @@ class LGCrawlerV7:
 def main():
     """CLI 인터페이스"""
     parser = argparse.ArgumentParser(
-        description='LG U+ 휴대폰 지원금 크롤러 v7.0',
+        description='LG U+ 휴대폰 지원금 크롤러 v7.2',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
     parser.add_argument('--workers', type=int, default=1,
-                        help='동시 실행 워커 수 (기본: 1, 안정성)')
+                        help='동시 실행 워커 수 (기본: 1)')
     parser.add_argument('--max-rate-plans', type=int, default=0,
                         help='최대 요금제 수 (0=전체)')
     parser.add_argument('--show-browser', action='store_true',
                         help='브라우저 표시')
     parser.add_argument('--headless', action='store_true',
-                        help='Headless 모드 강제 실행')
+                        help='Headless 모드 실행')
     parser.add_argument('--output', type=str, default='data',
                         help='출력 디렉토리')
     parser.add_argument('--test', action='store_true',
                         help='테스트 모드 (처음 3개 조합만)')
-    parser.add_argument('--single-thread', action='store_true',
-                        help='단일 스레드 모드 (안정성)')
     parser.add_argument('--debug', action='store_true',
-                        help='디버그 모드 (스크린샷 저장)')
-    parser.add_argument('--retry', type=int, default=3,
-                        help='재시도 횟수 (기본: 3)')
+                        help='디버그 모드')
     
     args = parser.parse_args()
     
     # 설정
     config = {
-        'max_workers': 1 if args.single_thread else args.workers,
+        'max_workers': args.workers,
         'max_rate_plans': 3 if args.test else args.max_rate_plans,
         'show_browser': args.show_browser,
         'headless': args.headless,
         'output_dir': args.output,
-        'single_thread': args.single_thread,
         'debug_screenshots': args.debug,
-        'retry_count': args.retry
+        'test_mode': args.test
     }
     
     # 테스트 모드에서는 브라우저 표시
     if args.test:
         config['show_browser'] = True
         config['headless'] = False
-        config['debug_screenshots'] = True
     
     # 크롤러 실행
     crawler = LGCrawlerV7(config)
@@ -1189,30 +965,27 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         if RICH_AVAILABLE:
             console.print(Panel(
-                "[bold cyan]LG U+ 휴대폰 지원금 크롤러 v7.0[/bold cyan]\n\n"
-                "[yellow]안정화 버전[/yellow]\n\n"
-                "주요 특징:\n"
-                "  • 개선된 요소 감지 및 대기 메커니즘\n"
-                "  • 상세한 오류 로깅 및 디버깅\n"
-                "  • 스크린샷 디버깅 기능\n"
-                "  • 단일/멀티 스레드 모드 지원\n"
-                "  • 강화된 재시도 메커니즘\n\n"
+                "[bold cyan]LG U+ 휴대폰 지원금 크롤러 v7.2[/bold cyan]\n\n"
+                "[yellow]수정 버전[/yellow]\n\n"
+                "주요 수정사항:\n"
+                "  • v3.6 작동 코드 기반 재작성\n"
+                "  • 올바른 선택자 사용\n"
+                "  • 안정적인 데이터 추출\n"
+                "  • 개선된 페이지네이션\n\n"
                 "사용법:\n"
-                "  [green]python lg_crawler.py[/green]                    # 기본 실행 (안정성)\n"
-                "  [green]python lg_crawler.py --test[/green]             # 테스트 모드 (3개만)\n"
-                "  [green]python lg_crawler.py --workers 5[/green]        # 멀티스레드 (5개)\n"
-                "  [green]python lg_crawler.py --single-thread[/green]    # 단일 스레드\n"
+                "  [green]python lg_crawler.py[/green]                    # 기본 실행\n"
+                "  [green]python lg_crawler.py --test[/green]             # 테스트 모드\n"
+                "  [green]python lg_crawler.py --headless[/green]         # Headless 모드\n"
                 "  [green]python lg_crawler.py --debug[/green]            # 디버그 모드\n"
                 "  [green]python lg_crawler.py --help[/green]             # 도움말",
                 border_style="cyan"
             ))
         else:
-            print("LG U+ 휴대폰 지원금 크롤러 v7.0")
+            print("LG U+ 휴대폰 지원금 크롤러 v7.2")
             print("\n사용법:")
             print("  python lg_crawler.py                    # 기본 실행")
             print("  python lg_crawler.py --test             # 테스트 모드")
-            print("  python lg_crawler.py --workers 5        # 멀티스레드")
-            print("  python lg_crawler.py --single-thread    # 단일 스레드")
+            print("  python lg_crawler.py --headless         # Headless 모드")
             print("  python lg_crawler.py --debug            # 디버그 모드")
             print("  python lg_crawler.py --help             # 도움말")
         print()
